@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local MP3 Player v2.5 (Wide)</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --container-bg: #1e293b;
+            --panel-bg: #0f172a;
+            --accent-color: #38bdf8;
+            --text-color: #f8fafc;
+            --text-muted: #64748b;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+
+        /* [크기 조정] 전체 플레이어 가로폭을 750px -> 950px로 대폭 확장 */
+        .window-container {
+            background-color: var(--container-bg);
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            width: 950px; 
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid #334155;
+        }
+
+        /* 윈도우 타이틀바 */
+        .window-header {
+            background-color: #090d16;
+            padding: 12px 18px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            border-bottom: 1px solid #1e293b;
+            text-align: left;
+        }
+
+        /* 메인 레이아웃 (좌우 여백 및 간격 최적화) */
+        .main-layout {
+            display: flex;
+            padding: 25px;
+            gap: 25px;
+        }
+
+        /* 왼쪽 컨트롤 패널 */
+        .left-panel {
+            flex: 1.1; /* 플레이리스트 확보를 위해 비율을 살짝 조정 */
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* [공간 추가] 오른쪽 플레이리스트 패널 가로 비중 확대 */
+        .right-panel {
+            flex: 1.4; 
+            display: flex;
+            flex-direction: column;
+            background-color: var(--panel-bg);
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #334155;
+        }
+
+        /* 섹션 박스 기본 스타일 */
+        .section-box {
+            background-color: var(--panel-bg);
+            border-radius: 8px;
+            padding: 18px;
+            border: 1px solid #334155;
+        }
+
+        /* 1. 노래 제목 표시 영역 */
+        .title-box h3 { margin: 0 0 8px 0; color: var(--text-muted); font-size: 0.9rem; font-weight: normal; }
+        .song-title {
+            font-size: 1.35rem;
+            color: var(--accent-color);
+            font-weight: bold;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-height: 32px;
+        }
+
+        /* 2. 볼륨 및 재생 제어 정렬 */
+        .playback-row {
+            display: flex;
+            gap: 20px;
+        }
+
+        /* 볼륨 조절 박스 */
+        .volume-box {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .volume-box h4 { margin: 0 0 10px 0; color: var(--text-muted); font-size: 0.85rem; }
+        .volume-controls { display: flex; align-items: center; gap: 10px; }
+        .volume-slider { flex: 1; accent-color: var(--accent-color); cursor: pointer; }
+        .volume-text { font-size: 0.85rem; min-width: 35px; text-align: right; color: var(--text-muted); }
+
+        /* 타임라인 및 조작 버튼 */
+        .control-box {
+            flex: 1.8;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .timeline-group { display: flex; align-items: center; gap: 12px; font-size: 0.8rem; color: var(--text-muted); }
+        .progress-bar { flex: 1; accent-color: var(--accent-color); cursor: pointer; }
+        
+        .btn-group { display: flex; justify-content: center; gap: 25px; margin-top: 5px; }
+        .icon-btn {
+            background: none; border: none; color: var(--text-color);
+            font-size: 1.5rem; cursor: pointer; transition: color 0.2s;
+        }
+        .icon-btn:hover { color: var(--accent-color); }
+
+        /* 3. 드롭존 파일 추가 영역 */
+        .drop-zone {
+            border: 2px dashed #334155;
+            border-radius: 8px;
+            padding: 45px 20px;
+            text-align: center;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 1rem;
+        }
+        .drop-zone:hover, .drop-zone.hover {
+            border-color: var(--accent-color);
+            background-color: #1e293b;
+            color: var(--text-color);
+        }
+
+        /* 4. 오른쪽 플레이리스트 내부 스타일 변경 */
+        .playlist-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 15px; font-size: 1.15rem; font-weight: bold;
+        }
+        .playlist {
+            flex: 1; 
+            max-height: 250px; /* 세로 크기도 살짝 늘려 시원하게 보기 */
+            overflow-y: auto;
+            margin-bottom: 15px;
+            padding-right: 5px;
+        }
+        .playlist::-webkit-scrollbar { width: 6px; }
+        .playlist::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+        /* [핵심 수정] 리스트 내부에서 제목이 잘리지 않도록 여유 공간 최적화 */
+        .playlist-item {
+            padding: 12px; 
+            cursor: pointer; 
+            border-bottom: 1px solid #1e293b;
+            font-size: 0.9rem; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+            gap: 15px;
+        }
+        .playlist-item:hover { background-color: #1e293b; }
+        .playlist-item.active { background-color: #0c4a6e; color: var(--accent-color); font-weight: bold; }
+        
+        /* 제목 텍스트 속성: 폭이 넓어졌으므로 말줄임 처리가 훨씬 뒤에서 일어남 */
+        .playlist-item span { 
+            white-space: nowrap; 
+            overflow: hidden; 
+            text-overflow: ellipsis; 
+            flex: 1; 
+            text-align: left;
+        }
+        .delete-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.95rem; padding: 0 5px; }
+
+        .btn-add-files {
+            background-color: #1e293b; color: var(--text-color); border: 1px solid #334155;
+            padding: 12px; border-radius: 6px; cursor: pointer; font-weight: bold;
+            transition: background 0.2s; width: 100%; font-size: 0.95rem;
+        }
+        .btn-add-files:hover { background-color: #334155; border-color: var(--accent-color); }
+
+        #fileInput { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="window-container">
+    <div class="window-header">🎵 Local MP3 Player v2.5 (Wide & Full View)</div>
+    
+    <div class="main-layout">
+        <div class="left-panel">
+            <div class="section-box title-box">
+                <h3>Song Title</h3>
+                <div id="songTitle" class="song-title">파일을 추가해주세요</div>
+            </div>
+
+            <div class="playback-row">
+                <div class="section-box volume-box">
+                    <h4>Volume</h4>
+                    <div class="volume-controls">
+                        <span>🔊</span>
+                        <input type="range" id="volumeSlider" class="volume-slider" min="0" max="1" step="0.05" value="0.7">
+                        <span id="volumeText" class="volume-text">70%</span>
+                    </div>
+                </div>
+
+                <div class="section-box control-box">
+                    <div class="timeline-group">
+                        <span id="currentTime">0:00</span>
+                        <input type="range" id="progressBar" class="progress-bar" min="0" max="100" value="0">
+                        <span id="durationTime">0:00</span>
+                    </div>
+                    <div class="btn-group">
+                        <button class="icon-btn" onclick="playPrev()">⏮</button>
+                        <button class="icon-btn" id="playBtn" onclick="togglePlay()">▶</button>
+                        <button class="icon-btn" onclick="playNext()">⏭</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+                Drop Files Here or Click to Add
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <div class="playlist-header">
+                <span>Play List</span>
+                <span style="font-size: 1.2rem;">≡</span>
+            </div>
+            <div class="playlist" id="playlist">
+                <div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 0.9rem;">비어 있음</div>
+            </div>
+            <button class="btn-add-files" onclick="document.getElementById('fileInput').click()">+ Add Files</button>
+        </div>
+    </div>
+</div>
+
+<audio id="audioPlayer"></audio>
+<input type="file" id="fileInput" accept="audio/mp3, audio/*" multiple onchange="handleFiles(this.files)">
+
+<script>
+    const audioPlayer = document.getElementById('audioPlayer');
+    const songTitle = document.getElementById('songTitle');
+    const playlistContainer = document.getElementById('playlist');
+    const playBtn = document.getElementById('playBtn');
+    
+    const progressBar = document.getElementById('progressBar');
+    const currentTimeText = document.getElementById('currentTime');
+    const durationTimeText = document.getElementById('durationTime');
+    
+    const volumeSlider = document.getElementById('volumeSlider');
+    const volumeText = document.getElementById('volumeText');
+    const dropZone = document.getElementById('dropZone');
+
+    let playlist = [];
+    let currentIndex = -1;
+
+    // 드래그 앤 드롭
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('hover'); });
+    dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('hover'); });
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('hover');
+        if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
+    });
+
+    // 파일 로드
+    function handleFiles(files) {
+        const isFirstLoad = playlist.length === 0;
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            if (file.type.match('audio.*') || file.name.endsWith('.mp3')) {
+                const blobUrl = URL.createObjectURL(file);
+                playlist.push({ name: file.name, url: blobUrl });
+            }
+        }
+        renderPlaylist();
+        if (isFirstLoad && playlist.length > 0) playTrack(0);
+    }
+
+    // 플레이리스트 그리기
+    function renderPlaylist() {
+        if(playlist.length === 0) {
+            playlistContainer.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 0.9rem;">비어 있음</div>`;
+            return;
+        }
+        playlistContainer.innerHTML = "";
+        playlist.forEach((track, index) => {
+            const item = document.createElement('div');
+            item.classList.add('playlist-item');
+            if (index === currentIndex) item.classList.add('active');
+
+            const textSpan = document.createElement('span');
+            textSpan.innerText = `${index + 1}. ${track.name}`;
+            textSpan.title = track.name; // 마우스를 올리면 전체 이름이 툴팁으로 나오게 변경
+            textSpan.onclick = () => playTrack(index);
+            item.appendChild(textSpan);
+
+            const delBtn = document.createElement('button');
+            delBtn.innerText = "✕";
+            delBtn.classList.add('delete-btn');
+            delBtn.onclick = (e) => { e.stopPropagation(); deleteTrack(index); };
+            item.appendChild(delBtn);
+
+            playlistContainer.appendChild(item);
+        });
+    }
+
+    // 곡 재생
+    function playTrack(index) {
+        if (index < 0 || index >= playlist.length) return;
+        currentIndex = index;
+        songTitle.innerText = playlist[currentIndex].name;
+        audioPlayer.src = playlist[currentIndex].url;
+        playBtn.innerText = "⏸";
+        renderPlaylist();
+        audioPlayer.play().catch(err => console.log(err));
+    }
+
+    function togglePlay() {
+        if (playlist.length === 0) return;
+        if (audioPlayer.paused) {
+            audioPlayer.play();
+            playBtn.innerText = "⏸";
+        } else {
+            audioPlayer.pause();
+            playBtn.innerText = "▶";
+        }
+    }
+
+    function playPrev() {
+        if (playlist.length === 0) return;
+        let idx = currentIndex - 1 < 0 ? playlist.length - 1 : currentIndex - 1;
+        playTrack(idx);
+    }
+
+    function playNext() {
+        if (playlist.length === 0) return;
+        let idx = currentIndex + 1 >= playlist.length ? 0 : currentIndex + 1;
+        playTrack(idx);
+    }
+
+    function deleteTrack(index) {
+        URL.revokeObjectURL(playlist[index].url);
+        playlist.splice(index, 1);
+        if (playlist.length === 0) {
+            currentIndex = -1; songTitle.innerText = "파일을 추가해주세요"; audioPlayer.src = ""; playBtn.innerText = "▶";
+        } else if (index === currentIndex) {
+            playTrack(index >= playlist.length ? 0 : index);
+        } else if (index < currentIndex) {
+            currentIndex--;
+        }
+        renderPlaylist();
+    }
+
+    // 시간 포맷
+    function formatTime(secs) {
+        if (isNaN(secs)) return "0:00";
+        const m = Math.floor(secs / 60);
+        const s = Math.floor(secs % 60);
+        return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    // 오디오 이벤트
+    audioPlayer.addEventListener('timeupdate', () => {
+        if(audioPlayer.duration) {
+            const pct = (audioPlayer.currentTime / audioPlayer.duration) * 100;
+            progressBar.value = pct;
+            currentTimeText.innerText = formatTime(audioPlayer.currentTime);
+        }
+    });
+
+    audioPlayer.addEventListener('loadedmetadata', () => {
+        durationTimeText.innerText = formatTime(audioPlayer.duration);
+    });
+
+    progressBar.addEventListener('input', () => {
+        if(audioPlayer.duration) {
+            audioPlayer.currentTime = (progressBar.value / 100) * audioPlayer.duration;
+        }
+    });
+
+    // 볼륨 설정
+    audioPlayer.volume = volumeSlider.value;
+    volumeSlider.addEventListener('input', () => {
+        audioPlayer.volume = volumeSlider.value;
+        volumeText.innerText = `${Math.round(volumeSlider.value * 100)}%`;
+    });
+
+    audioPlayer.addEventListener('ended', playNext);
+</script>
+
+</body>
+</html>

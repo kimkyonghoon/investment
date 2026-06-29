@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>좌측 툴바 & 정밀 통합 검색 PDF 뷰어</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf_viewer.min.css">
+    
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; height: 100vh; background-color: #f5f5f5; overflow: hidden; }
+        
+        /* 좌측 툴바 영역 */
+        #sidebar { width: 320px; background: #222; color: white; display: flex; flex-direction: column; border-right: 1px solid #444; z-index: 10; }
+        #controlPanel { padding: 20px; background: #333; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+        #searchInput { padding: 10px 12px; border-radius: 4px; border: none; width: 100%; font-size: 14px; background: #fff; color: #333; }
+        .search-nav { display: flex; gap: 8px; }
+        .search-nav .btn { flex: 1; }
+        
+        .btn { background: #007bff; color: white; padding: 10px 14px; border-radius: 4px; cursor: pointer; border: none; font-size: 14px; font-weight: bold; text-align: center; transition: background 0.2s; }
+        .btn:hover { background: #0056b3; }
+        #fileInput { display: none; }
+        #searchStatus { font-size: 13px; color: #bbb; line-height: 1.4; text-align: center; min-height: 18px; }
+
+        /* 하단 세로형 탭 목록 */
+        #tabContainer { flex: 1; overflow-y: auto; padding: 15px 10px; display: flex; flex-direction: column; gap: 8px; }
+        .tab { background: #444; color: #ccc; padding: 12px 15px; border-radius: 6px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; transition: all 0.2s; border: 1px solid transparent; }
+        .tab:hover { background: #555; color: #fff; }
+        .tab.active { background: #fff; color: #333; font-weight: bold; border-color: #007bff; box-shadow: 0 2px 4px rgba(0,0,0,0.15); }
+        .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+        .close-tab { cursor: pointer; color: #888; font-weight: bold; font-size: 16px; padding: 0 4px; }
+        .close-tab:hover { color: #ff4d4d; }
+
+        /* 우측: PDF 메인 출력 뷰어 영역 */
+        #viewerContainer { flex: 1; overflow: auto; padding: 30px; display: flex; flex-direction: column; align-items: center; background: #e0e0e0; position: relative; }
+        .page-container { position: relative; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); background: white; }
+        
+        /* 정밀 검색용 커스텀 하이라이트 레이어 */
+        .custom-highlight { position: absolute; background-color: rgba(255, 255, 0, 0.45); border: 1px solid #d4af37; pointer-events: none; mix-blend-mode: multiply; border-radius: 2px; z-index: 5; }
+        .custom-highlight.selected { background-color: rgba(255, 102, 0, 0.65) !important; border: 1px solid #ff4500; box-shadow: 0 0 5px rgba(255,69,0,0.6); }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <div id="controlPanel">
+            <label class="btn" for="fileInput">PDF 파일 업로드</label>
+            <input type="file" id="fileInput" accept=".pdf" multiple>
+            
+            <input type="text" id="searchInput" placeholder="문서 내 검색어 입력 후 Enter...">
+            <div class="search-nav">
+                <button class="btn" id="prevBtn" onclick="navigateSearch(-1)">이전</button>
+                <button class="btn" id="nextBtn" onclick="navigateSearch(1)">다음</button>
+            </div>
+            <div id="searchStatus">PDF 파일을 업로드해 주세요.</div>
+        </div>
+
+        <div id="tabContainer"></div>
+    </div>
+
+    <div id="viewerContainer">
+        <div style="color:#666; margin-top: 50px; font-size: 18px;">좌측 상단 버튼을 눌러 PDF 파일을 추가해 주세요.</div>
+    </div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+        let filesMap = new Map(); 
+        let activeTabId = null;
+        
+        let searchMatches = []; 
+        let currentMatchIndex = -1;
+        let pageTextViewports = {}; 
+
+        const fileInput = document.getElementById('fileInput');
+        const tabContainer = document.getElementById('tabContainer');
+        const viewerContainer = document.getElementById('viewerContainer');
+        const searchInput = document.getElementById('searchInput');
+        const searchStatus = document.getElementById('searchStatus');
+
+        fileInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            files.forEach(file => {
+                const id = 'pdf-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+                const fileURL = URL.createObjectURL(file);
+                
+                filesMap.set(id, { name: file.name, url: fileURL, pdfDoc: null });
+                createTab(id, file.name);
+            });
+            fileInput.value = ''; 
+        });
+
+        function createTab(id, name) {
+            const tab = document.createElement('div');
+            tab.className = 'tab';
+            tab.id = `tab-${id}`;
+            tab.innerHTML = `
+                <span class="tab-title" title="${name}">${name}</span>
+                <span class="close-tab" onclick="closeTab(event, '${id}')">&times;</span>
+            `;
+            tab.addEventListener('click', (e) => {
+                if(!e.target.classList.contains('close-tab')) switchTab(id);
+            });
+            tabContainer.appendChild(tab);
+            switchTab(id);
+        }
+
+        async function switchTab(id) {
+            if (activeTabId === id) return;
+            resetSearchState();
+            pageTextViewports = {};
+            
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            activeTabId = id;
+            const currentTab = document.getElementById(`tab-${id}`);
+            if(currentTab) currentTab.classList.add('active');
+
+            viewerContainer.innerHTML = '<div style="color:#333; font-size:16px; margin-top:50px;">PDF 문서를 분석하고 있습니다...</div>';
+
+            const fileData = filesMap.get(id);
+            if (!fileData) return;
+
+            try {
+                if (!fileData.pdfDoc) {
+                    fileData.pdfDoc = await pdfjsLib.getDocument(fileData.url).promise;
+                }
+                await renderPDF(fileData.pdfDoc);
+            } catch (error) {
+                viewerContainer.innerHTML = '<div style="color:red; margin-top:50px;">PDF를 불러오는 중 오류가 발생했습니다.</div>';
+                console.error(error);
+            }
+        }
+
+        async function renderPDF(pdfDoc) {
+            viewerContainer.innerHTML = ''; 
+
+            for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+                const page = await pdfDoc.getPage(pageNum);
+                const scale = 1.5; 
+                const viewport = page.getViewport({ scale: scale });
+
+                const pageContainer = document.createElement('div');
+                pageContainer.className = 'page-container';
+                pageContainer.id = `page-container-${pageNum}`;
+                pageContainer.style.width = viewport.width + 'px';
+                pageContainer.style.height = viewport.height + 'px';
+
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                pageContainer.appendChild(canvas);
+
+                const textLayerDiv = document.createElement('div');
+                textLayerDiv.className = 'textLayer';
+                textLayerDiv.style.width = viewport.width + 'px';
+                textLayerDiv.style.height = viewport.height + 'px';
+                pageContainer.appendChild(textLayerDiv);
+
+                viewerContainer.appendChild(pageContainer);
+
+                await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+                const textContent = await page.getTextContent();
+                
+                await pdfjsLib.renderTextLayer({
+                    textContent: textContent,
+                    container: textLayerDiv,
+                    viewport: viewport,
+                    textDivs: []
+                }).promise;
+
+                pageTextViewports[pageNum] = {
+                    textContent: textContent,
+                    viewport: viewport,
+                    container: pageContainer
+                };
+            }
+            searchStatus.innerText = "준비 완료. 단어를 검색해 보세요!";
+        }
+
+        // [버그 수정 완료] 문자열 통합 방식 기반의 전면 개편된 검색 로직
+        function executeSearch() {
+            const keyword = searchInput.value.trim().toLowerCase();
+            removeHighlights();
+            resetSearchState();
+
+            if (!keyword) {
+                searchStatus.innerText = "검색어를 입력하세요.";
+                return;
+            }
+
+            Object.keys(pageTextViewports).forEach(pageStr => {
+                const pageNum = parseInt(pageStr);
+                const pageData = pageTextViewports[pageNum];
+                const items = pageData.textContent.items;
+                const viewport = pageData.viewport;
+
+                if (items.length === 0) return;
+
+                // 1. 페이지 내 모든 텍스트 파편을 하나의 텍스트 스트링으로 통합하며 맵 구축
+                let fullText = "";
+                let charMapping = []; // 통합 문자열의 각 글자가 어떤 item 인덱스에 속하는지 매핑
+
+                items.forEach((item, itemIdx) => {
+                    const str = item.str;
+                    for (let i = 0; i < str.length; i++) {
+                        fullText += str[i];
+                        charMapping.push({ itemIdx: itemIdx, charIdx: i });
+                    }
+                });
+
+                // 2. 통합된 텍스트 전체에서 키워드가 매칭되는 통합 인덱스 위치 모두 검색
+                let searchIndex = fullText.toLowerCase().indexOf(keyword);
+                
+                while (searchIndex !== -1) {
+                    // 검색된 단어의 시작 매핑 구역 정보 가져오기
+                    const startMap = charMapping[searchIndex];
+                    const matchedItem = items[startMap.itemIdx];
+
+                    if (matchedItem) {
+                        const tx = pdfjsLib.Util.transform(viewport.transform, matchedItem.transform);
+                        const fontHeight = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]);
+                        const itemHeight = matchedItem.height ? matchedItem.height * viewport.scale : fontHeight;
+
+                        // 대략적인 매칭 단어의 가로 길이 비율 계산 (파편화 대응 보정)
+                        const ratio = matchedItem.str.length > 0 ? (keyword.length / matchedItem.str.length) : 1;
+                        let itemWidth = (matchedItem.width * viewport.scale) * Math.min(ratio, 1);
+                        
+                        if (itemWidth <= 0) itemWidth = keyword.length * fontHeight * 0.6; 
+
+                        // 하이라이트 박스 생성 및 픽셀 배치
+                        const highlightDiv = document.createElement('div');
+                        highlightDiv.className = 'custom-highlight';
+                        
+                        highlightDiv.style.left = tx[4] + 'px';
+                        highlightDiv.style.top = (viewport.height - tx[5] - itemHeight) + 'px';
+                        highlightDiv.style.width = itemWidth + 'px';
+                        highlightDiv.style.height = itemHeight + 'px';
+
+                        pageData.container.appendChild(highlightDiv);
+
+                        searchMatches.push({
+                            pageNum: pageNum,
+                            element: highlightDiv
+                        });
+                    }
+
+                    // 다음 매칭 결과가 동일 페이지에 더 있는지 확인하기 위해 인덱스 이동
+                    searchIndex = fullText.toLowerCase().indexOf(keyword, searchIndex + 1);
+                }
+            });
+
+            if (searchMatches.length > 0) {
+                currentMatchIndex = 0;
+                highlightCurrentMatch();
+            } else {
+                searchStatus.innerText = "일치하는 단어가 없습니다.";
+            }
+        }
+
+        function highlightCurrentMatch() {
+            if (searchMatches.length === 0) return;
+
+            searchMatches.forEach(m => m.element.classList.remove('selected'));
+
+            const current = searchMatches[currentMatchIndex];
+            current.element.classList.add('selected');
+
+            searchStatus.innerText = `${currentMatchIndex + 1} / ${searchMatches.length} 검색됨`;
+            current.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function navigateSearch(direction) {
+            if (searchMatches.length === 0) return;
+
+            currentMatchIndex += direction;
+            if (currentMatchIndex < 0) currentMatchIndex = searchMatches.length - 1;
+            if (currentMatchIndex >= searchMatches.length) currentMatchIndex = 0;
+
+            highlightCurrentMatch();
+        }
+
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                executeSearch();
+            }
+        });
+
+        function removeHighlights() {
+            document.querySelectorAll('.custom-highlight').forEach(el => el.remove());
+        }
+
+        function resetSearchState() {
+            searchMatches = [];
+            currentMatchIndex = -1;
+            searchStatus.innerText = "";
+        }
+
+        function closeTab(event, id) {
+            event.stopPropagation();
+            const tab = document.getElementById(`tab-${id}`);
+            tab.remove();
+            
+            const fileData = filesMap.get(id);
+            if(fileData) URL.revokeObjectURL(fileData.url);
+            filesMap.delete(id);
+
+            if (activeTabId === id) {
+                activeTabId = null;
+                viewerContainer.innerHTML = '<div style="color:#666; margin-top: 50px; font-size: 18px;">좌측 상단 버튼을 눌러 PDF 파일을 추가해 주세요.</div>';
+                resetSearchState();
+                pageTextViewports = {};
+                const remainingTabs = filesMap.keys().next().value;
+                if (remainingTabs) switchTab(remainingTabs);
+            }
+        }
+    </script>
+</body>
+</html>
